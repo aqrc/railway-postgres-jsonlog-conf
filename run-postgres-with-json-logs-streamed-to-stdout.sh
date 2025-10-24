@@ -21,21 +21,17 @@ rm -f "$PGDATA/log/postgresql.json"
 # Create a named pipe (FIFO) for Postgres to write its JSON logs into
 mkfifo "$PGDATA/log/postgresql.json"
 
-# Start Postgres in the background using the official entrypoint.
-# This handles database initialization and config automatically.
-docker-entrypoint.sh postgres &
-pid=$!
-
 # Relay: read JSON logs from the FIFO, send them both to a file
 # and to stdout (for Railway logs). "tee" duplicates the stream.
 # Each line has "error_severity" renamed to "level" for nicer JSON.
-cat "$PGDATA/log/postgresql.json" | tee /tmp/pglog.raw | \
+(cat "$PGDATA/log/postgresql.json" | tee /tmp/pglog.raw | \
 while IFS= read -r line; do
   # Replace "error_severity" key with "level"
   line=${line//error_severity/level}
   # Print each line to container stdout (Railway log collector)
   printf "%s\n" "$line" > /proc/1/fd/1 || true
-done &
+done) &
 
-# Wait for the Postgres process to exit, keeping the container alive
-wait $pid
+
+# Hand off control to the official entrypoint (foreground)
+exec docker-entrypoint.sh postgres
