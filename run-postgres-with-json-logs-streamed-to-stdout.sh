@@ -12,26 +12,42 @@
 #   5. Keeps the container alive until Postgres exits
 # ──────────────────────────────────────────────────────────────
 
-# Ensure the log directory exists
-mkdir -p "$PGDATA/log"
+# Start Postgres in the background using the official entrypoint.
+# This handles database initialization and config automatically.
+docker-entrypoint.sh postgres &
+pid=$!
 
-# Remove any stale log FIFO from previous runs
-rm -f "$PGDATA/log/postgresql.json"
+# Wait until Postgres accepts connections (needed for pg_rotate_logfile)
+for i in {1..60}; do
+  if psql "$DATABASE_URL" -qAt -c "SELECT 1" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
+LOG_FILE="$PGDATA/log/postgresql.json"
+
+# Backup original log file
+mv -f "$LOG_FILE" "$LOG_FILE.prev"
 
 # Create a named pipe (FIFO) for Postgres to write its JSON logs into
-mkfifo "$PGDATA/log/postgresql.json"
+mkfifo "$LOG_FILE"
+chown postgres:postgres "$LOG_FILE"
+chmod 600 "$LOG_FILE"
 
 # Relay: read JSON logs from the FIFO, send them both to a file
 # and to stdout (for Railway logs). "tee" duplicates the stream.
 # Each line has "error_severity" renamed to "level" for nicer JSON.
-(cat "$PGDATA/log/postgresql.json" | tee /tmp/pglog.raw | \
+cat "$LOG_FILE" | tee /tmp/pglog.raw | \
 while IFS= read -r line; do
   # Replace "error_severity" key with "level"
   line=${line//error_severity/level}
   # Print each line to container stdout (Railway log collector)
   printf "%s\n" "$line" > /proc/1/fd/1 || true
-done) &
+done &
 
+# Force logger to close/reopen -> it will attach to the FIFO now
+psql "$DATABASE_URL" -qAt -c "SELECT pg_rotate_logfile();"
 
-# Hand off control to the official entrypoint (foreground)
-exec docker-entrypoint.sh postgres
+# Wait for the Postgres process to exit, keeping the container alive
+wait $pid
