@@ -1,5 +1,5 @@
 FROM postgres:17
-COPY 01-logging.conf /docker-entrypoint-initdb.d/
+COPY 01-json-logging.conf /docker-entrypoint-initdb.d/
 
 ARG START_SCRIPT=/usr/local/bin/start.sh
 ENV START_SCRIPT=${START_SCRIPT}
